@@ -34,9 +34,9 @@ contract PositionManager is
 
     // Position structure (on-chain storage)
     struct Position {
-        PositionDirection positionDirection;
         uint256 amount;
         uint256 uniswapTokenId;
+        PositionDirection positionDirection;
         bool isNativeA;
         bool isNativeB;
     }
