@@ -21,17 +21,7 @@ contract PositionManager is
     Pausable,
     Ownable
 {
-    INonfungiblePositionManager public immutable _nonfungiblePositionManager;
-    IUniswapV3Factory public immutable _uniswapFactory;
-    IWETH9 public immutable _WETH9;
-    address public immutable _ETH;
-
-    // Mapping from PositionManager's Token ID to Positions
-    mapping(uint256 => Position) private _positions;
-
-    // PositionManager's NFT token id
-    uint256 private _nextTokenId;
-
+    //Type declarations
     // Position structure (on-chain storage)
     struct Position {
         uint256 amount;
@@ -63,6 +53,19 @@ contract PositionManager is
         SELL
     }
 
+    //State variables
+    INonfungiblePositionManager public immutable _nonfungiblePositionManager;
+    IUniswapV3Factory public immutable _uniswapFactory;
+    IWETH9 public immutable _WETH9;
+    address public immutable _ETH;
+
+    // Mapping from PositionManager's Token ID to Positions
+    mapping(uint256 => Position) private _positions;
+
+    // PositionManager's NFT token id
+    uint256 private _nextTokenId;
+
+    //Events
     event BuyPositionOpened(
         uint256 indexed tokenId,
         address indexed user,
@@ -81,6 +84,12 @@ contract PositionManager is
 
     event PositionClosed(uint256 indexed tokenId, address indexed user);
 
+    //Errors
+    error PositionManager__InsufficientMaticBalance();
+    error PositionManager__StopPriceTooLow();
+    error PositionManager__StopPriceTooHigh();
+    error PositionManager__IncorrectClosure();
+
     constructor(
         address nonfungiblePositionManager_,
         address uniswapFactory_,
@@ -95,10 +104,11 @@ contract PositionManager is
         _ETH = ETH_;
     }
 
-    // Function that sets pause state of the contract
-    function setPause(bool state) external onlyOwner {
-        state ? _pause() : _unpause();
-    }
+    // Function that just recieves plain native token
+    receive() external payable {}
+
+    // Fallback function
+    fallback() external payable {}
 
     // Function that opens BUY (down-direction) position using ONLY tokenB
     function openBuyPosition(
@@ -144,42 +154,14 @@ contract PositionManager is
         );
     }
 
-    // Function that checks if position can be closed
-    function canClosePosition(uint256 tokenId) public view returns (bool) {
-        Position memory _position = _positions[tokenId];
-        (
-            ,
-            ,
-            address token0,
-            address token1,
-            uint24 fee,
-            int24 tickLower,
-            int24 tickUpper,
-            ,
-            ,
-            ,
-            ,
-
-        ) = _nonfungiblePositionManager.positions(_position.uniswapTokenId);
-        address pool = getPoolAddress(token0, token1, fee);
-        int24 currentTick = getCurrentTick(pool);
-        PositionDirection dir = _position.positionDirection;
-
-        if (dir == PositionDirection.BUY) {
-            return currentTick < tickLower;
-        }
-        return currentTick > tickUpper;
-    }
-
     // Function that closes the position
     function closePosition(uint256 tokenId) external {
         // keep address before burning the token
         address owner = ERC721.ownerOf(tokenId);
 
-        require(
-            msg.sender == owner || canClosePosition(tokenId),
-            "PositionManager: position can't be closed"
-        );
+        if (!(msg.sender == owner || canClosePosition(tokenId))) {
+            revert PositionManager__IncorrectClosure();
+        }
 
         _decreaseLiquidity(tokenId);
         collect(tokenId);
@@ -188,34 +170,15 @@ contract PositionManager is
         emit PositionClosed(tokenId, owner);
     }
 
-    // Function that provides the current price of pool in SqrtX96 format
-    function getCurrentSqrtPriceX96(
-        address tokenA,
-        address tokenB,
-        uint24 fee
-    ) external view returns (uint160 currentSqrtPriceX96) {
-        address pool = _uniswapFactory.getPool(tokenA, tokenB, fee);
-        (currentSqrtPriceX96, , , , , , ) = IUniswapV3Pool(pool).slot0();
-    }
-
-    // Function that gets the pool address
-    function getPoolAddress(
-        address tokenA,
-        address tokenB,
-        uint24 fee
-    ) public view returns (address pool) {
-        pool = _uniswapFactory.getPool(tokenA, tokenB, fee);
-    }
-
-    // Function that gets the current tick on the particular pool
-    function getCurrentTick(address pool) public view returns (int24 tick) {
-        (, tick, , , , , ) = IUniswapV3Pool(pool).slot0();
+    // Function that sets pause state of the contract
+    function setPause(bool state) external onlyOwner {
+        state ? _pause() : _unpause();
     }
 
     // Function that returns open positions array owned by user
     function getOpenPositions(
         address user
-    ) public view returns (PositionExtended[] memory) {
+    ) external view returns (PositionExtended[] memory) {
         uint count = ERC721.balanceOf(user);
         PositionExtended[]
             memory positionExtendedArray = new PositionExtended[](count);
@@ -244,6 +207,16 @@ contract PositionManager is
         }
 
         return positionExtendedArray;
+    }
+
+    // Function that provides the current price of pool in SqrtX96 format
+    function getCurrentSqrtPriceX96(
+        address tokenA,
+        address tokenB,
+        uint24 fee
+    ) external view returns (uint160 currentSqrtPriceX96) {
+        address pool = _uniswapFactory.getPool(tokenA, tokenB, fee);
+        (currentSqrtPriceX96, , , , , , ) = IUniswapV3Pool(pool).slot0();
     }
 
     // Implementing `onERC721Received` so this contract can receive custody of erc721 tokens
@@ -280,119 +253,36 @@ contract PositionManager is
         );
     }
 
-    // ========================================================================
-    // PRIVATE FUNCTIONS:
-    // ========================================================================
+    // Function that checks if position can be closed
+    function canClosePosition(uint256 tokenId) public view returns (bool) {
+        Position memory _position = _positions[tokenId];
+        (
+            ,
+            ,
+            address token0,
+            address token1,
+            uint24 fee,
+            int24 tickLower,
+            int24 tickUpper,
+            ,
+            ,
+            ,
+            ,
 
-    // Function that check native balance and wrap native if needed
-    function _wrap(uint256 amount) private {
-        require(
-            msg.value >= amount,
-            "PositionManager: Insufficient balance of MATIC"
-        );
-        _WETH9.deposit{value: amount}();
+        ) = _nonfungiblePositionManager.positions(_position.uniswapTokenId);
+        address pool = getPoolAddress(token0, token1, fee);
+        int24 currentTick = getCurrentTick(pool);
+        PositionDirection dir = _position.positionDirection;
+
+        if (dir == PositionDirection.BUY) {
+            return currentTick < tickLower;
+        }
+        return currentTick > tickUpper;
     }
 
-    // Generic function that opens ANY (any-direction) position using tokenA AND|OR tokenB
-    function _openPosition(
-        PositionDirection positionDirection,
-        address tokenA,
-        address tokenB,
-        uint24 fee,
-        uint160 stopSqrtPriceX96,
-        uint256 amountADesired,
-        uint256 amountBDesired,
-        uint256 amountAMin,
-        uint256 amountBMin
-    ) private whenNotPaused {
-        bool isNativeA;
-        bool isNativeB;
-
-        if (tokenA == _ETH) {
-            _wrap(amountADesired);
-            tokenA = address(_WETH9);
-            isNativeA = true;
-        } else if (tokenB == _ETH) {
-            _wrap(amountBDesired);
-            tokenB = address(_WETH9);
-            isNativeB = true;
-        }
-
-        address pool = getPoolAddress(tokenA, tokenB, fee);
-        int24 tickSpacing = IUniswapV3PoolImmutables(pool).tickSpacing();
-        (, int24 currentTick, , , , , ) = IUniswapV3Pool(pool).slot0();
-
-        int24 startTick = _nearestUsableTick(currentTick, tickSpacing);
-        int24 stopTick = _nearestUsableTick(
-            TickMath.getTickAtSqrtRatio(stopSqrtPriceX96),
-            tickSpacing
-        );
-
-        if (positionDirection == PositionDirection.BUY) {
-            startTick -= tickSpacing;
-
-            require(
-                startTick > stopTick,
-                "PositionManager: Stop price must be lower than the current"
-            );
-
-            _addLiquidity(
-                positionDirection,
-                tokenA,
-                tokenB,
-                fee,
-                stopTick,
-                startTick,
-                amountADesired,
-                amountBDesired,
-                amountAMin,
-                amountBMin,
-                false,
-                true,
-                isNativeA,
-                isNativeB
-            );
-
-            emit BuyPositionOpened(
-                _nextTokenId,
-                msg.sender,
-                stopTick,
-                pool,
-                _positions[_nextTokenId].amount
-            );
-        } else if (positionDirection == PositionDirection.SELL) {
-            startTick += tickSpacing;
-
-            require(
-                startTick < stopTick,
-                "PositionManager: Stop price must be higher than the current"
-            );
-
-            _addLiquidity(
-                positionDirection,
-                tokenA,
-                tokenB,
-                fee,
-                startTick,
-                stopTick,
-                amountADesired,
-                amountBDesired,
-                amountAMin,
-                amountBMin,
-                true,
-                false,
-                isNativeA,
-                isNativeB
-            );
-
-            emit SellPositionOpened(
-                _nextTokenId,
-                msg.sender,
-                stopTick,
-                pool,
-                _positions[_nextTokenId].amount
-            );
-        }
+    // Function that gets the current tick on the particular pool
+    function getCurrentTick(address pool) public view returns (int24 tick) {
+        (, tick, , , , , ) = IUniswapV3Pool(pool).slot0();
     }
 
     // Function that adds the liquidity and create a new position
@@ -510,52 +400,127 @@ contract PositionManager is
         }
     }
 
-    // Function that returns the nearest tick
-    // https://uniswapv3book.com/docs/milestone_4/tick-rounding/
-    function _nearestUsableTick(
-        int24 tick_,
-        int24 tickSpacing
-    ) internal pure returns (int24 result) {
-        result =
-            int24(_divRound(int128(tick_), int128(tickSpacing))) *
-            tickSpacing;
+    // Function that gets the pool address
+    function getPoolAddress(
+        address tokenA,
+        address tokenB,
+        uint24 fee
+    ) public view returns (address pool) {
+        pool = _uniswapFactory.getPool(tokenA, tokenB, fee);
+    }
 
-        if (result < TickMath.MIN_TICK) {
-            result += tickSpacing;
-        } else if (result > TickMath.MAX_TICK) {
-            result -= tickSpacing;
+    // ========================================================================
+    // PRIVATE FUNCTIONS:
+    // ========================================================================
+
+    // Generic function that opens ANY (any-direction) position using tokenA AND|OR tokenB
+    function _openPosition(
+        PositionDirection positionDirection,
+        address tokenA,
+        address tokenB,
+        uint24 fee,
+        uint160 stopSqrtPriceX96,
+        uint256 amountADesired,
+        uint256 amountBDesired,
+        uint256 amountAMin,
+        uint256 amountBMin
+    ) private whenNotPaused {
+        bool isNativeA;
+        bool isNativeB;
+
+        if (tokenA == _ETH) {
+            _wrap(amountADesired);
+            tokenA = address(_WETH9);
+            isNativeA = true;
+        } else if (tokenB == _ETH) {
+            _wrap(amountBDesired);
+            tokenB = address(_WETH9);
+            isNativeB = true;
+        }
+
+        address pool = getPoolAddress(tokenA, tokenB, fee);
+        int24 tickSpacing = IUniswapV3PoolImmutables(pool).tickSpacing();
+        (, int24 currentTick, , , , , ) = IUniswapV3Pool(pool).slot0();
+
+        int24 startTick = _nearestUsableTick(currentTick, tickSpacing);
+        int24 stopTick = _nearestUsableTick(
+            TickMath.getTickAtSqrtRatio(stopSqrtPriceX96),
+            tickSpacing
+        );
+
+        if (positionDirection == PositionDirection.BUY) {
+            startTick -= tickSpacing;
+
+            //startTick must be higher than the stopTick
+            if (startTick <= stopTick) {
+                revert PositionManager__StopPriceTooHigh();
+            }
+
+            _addLiquidity(
+                positionDirection,
+                tokenA,
+                tokenB,
+                fee,
+                stopTick,
+                startTick,
+                amountADesired,
+                amountBDesired,
+                amountAMin,
+                amountBMin,
+                false,
+                true,
+                isNativeA,
+                isNativeB
+            );
+
+            emit BuyPositionOpened(
+                _nextTokenId,
+                msg.sender,
+                stopTick,
+                pool,
+                _positions[_nextTokenId].amount
+            );
+        } else if (positionDirection == PositionDirection.SELL) {
+            startTick += tickSpacing;
+
+            //startTick must be lower than the stopTick
+            if (startTick >= stopTick) {
+                revert PositionManager__StopPriceTooLow();
+            }
+
+            _addLiquidity(
+                positionDirection,
+                tokenA,
+                tokenB,
+                fee,
+                startTick,
+                stopTick,
+                amountADesired,
+                amountBDesired,
+                amountAMin,
+                amountBMin,
+                true,
+                false,
+                isNativeA,
+                isNativeB
+            );
+
+            emit SellPositionOpened(
+                _nextTokenId,
+                msg.sender,
+                stopTick,
+                pool,
+                _positions[_nextTokenId].amount
+            );
         }
     }
 
-    // div helper function
-    function _divRound(
-        int128 x,
-        int128 y
-    ) internal pure returns (int128 result) {
-        int128 quot = ABDKMath64x64.div(x, y);
-        result = quot >> 64;
-
-        // Check if remainder is greater than 0.5
-        if (quot % 2 ** 64 >= 0x8000000000000000) {
-            result += 1;
+    // Function that check native balance and wrap native if needed
+    function _wrap(uint256 amount) private {
+        if (msg.value < amount) {
+            revert PositionManager__InsufficientMaticBalance();
         }
-    }
-
-    // Function that decreases the liquidity
-    function _decreaseLiquidity(uint256 tokenId) internal {
-        (, , , , , , , uint128 liquidity, , , , ) = _nonfungiblePositionManager
-            .positions(_positions[tokenId].uniswapTokenId);
-        INonfungiblePositionManager.DecreaseLiquidityParams
-            memory params = INonfungiblePositionManager
-                .DecreaseLiquidityParams({
-                    tokenId: _positions[tokenId].uniswapTokenId,
-                    liquidity: liquidity,
-                    amount0Min: 0,
-                    amount1Min: 0,
-                    deadline: block.timestamp
-                });
-
-        _nonfungiblePositionManager.decreaseLiquidity(params);
+        _WETH9.deposit{value: amount}();
     }
 
     // Function that sends the tokens back to owner
@@ -566,7 +531,7 @@ contract PositionManager is
         uint256 amount1,
         bool isNative0,
         bool isNative1
-    ) internal {
+    ) private {
         (
             ,
             ,
@@ -601,15 +566,57 @@ contract PositionManager is
     }
 
     // Function that that burns the NFT
-    function _burnPosition(uint256 tokenId) internal {
+    function _burnPosition(uint256 tokenId) private {
         _nonfungiblePositionManager.burn(_positions[tokenId].uniswapTokenId);
         delete _positions[tokenId];
         ERC721._burn(tokenId);
     }
 
-    // Function that just recieves plain native token
-    receive() external payable {}
+    // Function that decreases the liquidity
+    function _decreaseLiquidity(uint256 tokenId) private {
+        (, , , , , , , uint128 liquidity, , , , ) = _nonfungiblePositionManager
+            .positions(_positions[tokenId].uniswapTokenId);
+        INonfungiblePositionManager.DecreaseLiquidityParams
+            memory params = INonfungiblePositionManager
+                .DecreaseLiquidityParams({
+                    tokenId: _positions[tokenId].uniswapTokenId,
+                    liquidity: liquidity,
+                    amount0Min: 0,
+                    amount1Min: 0,
+                    deadline: block.timestamp
+                });
 
-    // Fallback function
-    fallback() external payable {}
+        _nonfungiblePositionManager.decreaseLiquidity(params);
+    }
+
+    // Function that returns the nearest tick
+    // https://uniswapv3book.com/docs/milestone_4/tick-rounding/
+    function _nearestUsableTick(
+        int24 tick_,
+        int24 tickSpacing
+    ) private pure returns (int24 result) {
+        result =
+            int24(_divRound(int128(tick_), int128(tickSpacing))) *
+            tickSpacing;
+
+        if (result < TickMath.MIN_TICK) {
+            result += tickSpacing;
+        } else if (result > TickMath.MAX_TICK) {
+            result -= tickSpacing;
+        }
+    }
+
+    // div helper function
+    function _divRound(
+        int128 x,
+        int128 y
+    ) private pure returns (int128 result) {
+        int128 quot = ABDKMath64x64.div(x, y);
+        result = quot >> 64;
+
+        // Check if remainder is greater than 0.5
+        if (quot % 2 ** 64 >= 0x8000000000000000) {
+            result += 1;
+        }
+    }
 }
