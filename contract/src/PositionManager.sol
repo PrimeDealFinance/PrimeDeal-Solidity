@@ -409,114 +409,9 @@ contract PositionManager is
         pool = _uniswapFactory.getPool(tokenA, tokenB, fee);
     }
 
-    // Function that decreases the liquidity
-    function _decreaseLiquidity(uint256 tokenId) internal {
-        (, , , , , , , uint128 liquidity, , , , ) = _nonfungiblePositionManager
-            .positions(_positions[tokenId].uniswapTokenId);
-        INonfungiblePositionManager.DecreaseLiquidityParams
-            memory params = INonfungiblePositionManager
-                .DecreaseLiquidityParams({
-                    tokenId: _positions[tokenId].uniswapTokenId,
-                    liquidity: liquidity,
-                    amount0Min: 0,
-                    amount1Min: 0,
-                    deadline: block.timestamp
-                });
-
-        _nonfungiblePositionManager.decreaseLiquidity(params);
-    }
-
-    // Function that sends the tokens back to owner
-    function _sendToOwner(
-        uint256 uniswapTokenId,
-        address owner,
-        uint256 amount0,
-        uint256 amount1,
-        bool isNative0,
-        bool isNative1
-    ) internal {
-        (
-            ,
-            ,
-            address token0,
-            address token1,
-            ,
-            ,
-            ,
-            ,
-            ,
-            ,
-            ,
-
-        ) = _nonfungiblePositionManager.positions(uniswapTokenId);
-
-        if (amount0 > 0) {
-            if (isNative0) {
-                _WETH9.withdraw(amount0);
-                payable(owner).transfer(amount0);
-            } else {
-                TransferHelper.safeTransfer(token0, owner, amount0);
-            }
-        }
-        if (amount1 > 0) {
-            if (isNative1) {
-                _WETH9.withdraw(amount1);
-                payable(owner).transfer(amount1);
-            } else {
-                TransferHelper.safeTransfer(token1, owner, amount1);
-            }
-        }
-    }
-
-    // Function that that burns the NFT
-    function _burnPosition(uint256 tokenId) internal {
-        _nonfungiblePositionManager.burn(_positions[tokenId].uniswapTokenId);
-        delete _positions[tokenId];
-        ERC721._burn(tokenId);
-    }
-
-    // Function that returns the nearest tick
-    // https://uniswapv3book.com/docs/milestone_4/tick-rounding/
-    function _nearestUsableTick(
-        int24 tick_,
-        int24 tickSpacing
-    ) internal pure returns (int24 result) {
-        result =
-            int24(_divRound(int128(tick_), int128(tickSpacing))) *
-            tickSpacing;
-
-        if (result < TickMath.MIN_TICK) {
-            result += tickSpacing;
-        } else if (result > TickMath.MAX_TICK) {
-            result -= tickSpacing;
-        }
-    }
-
-    // div helper function
-    function _divRound(
-        int128 x,
-        int128 y
-    ) internal pure returns (int128 result) {
-        int128 quot = ABDKMath64x64.div(x, y);
-        result = quot >> 64;
-
-        // Check if remainder is greater than 0.5
-        if (quot % 2 ** 64 >= 0x8000000000000000) {
-            result += 1;
-        }
-    }
-
     // ========================================================================
     // PRIVATE FUNCTIONS:
     // ========================================================================
-
-    // Function that check native balance and wrap native if needed
-    function _wrap(uint256 amount) private {
-        if (msg.value < amount) {
-            revert PositionManager__InsufficientMaticBalance();
-        }
-        _WETH9.deposit{value: amount}();
-    }
 
     // Generic function that opens ANY (any-direction) position using tokenA AND|OR tokenB
     function _openPosition(
@@ -617,6 +512,111 @@ contract PositionManager is
                 pool,
                 _positions[_nextTokenId].amount
             );
+        }
+    }
+
+    // Function that check native balance and wrap native if needed
+    function _wrap(uint256 amount) private {
+        if (msg.value < amount) {
+            revert PositionManager__InsufficientMaticBalance();
+        }
+        _WETH9.deposit{value: amount}();
+    }
+
+    // Function that sends the tokens back to owner
+    function _sendToOwner(
+        uint256 uniswapTokenId,
+        address owner,
+        uint256 amount0,
+        uint256 amount1,
+        bool isNative0,
+        bool isNative1
+    ) private {
+        (
+            ,
+            ,
+            address token0,
+            address token1,
+            ,
+            ,
+            ,
+            ,
+            ,
+            ,
+            ,
+
+        ) = _nonfungiblePositionManager.positions(uniswapTokenId);
+
+        if (amount0 > 0) {
+            if (isNative0) {
+                _WETH9.withdraw(amount0);
+                payable(owner).transfer(amount0);
+            } else {
+                TransferHelper.safeTransfer(token0, owner, amount0);
+            }
+        }
+        if (amount1 > 0) {
+            if (isNative1) {
+                _WETH9.withdraw(amount1);
+                payable(owner).transfer(amount1);
+            } else {
+                TransferHelper.safeTransfer(token1, owner, amount1);
+            }
+        }
+    }
+
+    // Function that that burns the NFT
+    function _burnPosition(uint256 tokenId) private {
+        _nonfungiblePositionManager.burn(_positions[tokenId].uniswapTokenId);
+        delete _positions[tokenId];
+        ERC721._burn(tokenId);
+    }
+
+    // Function that decreases the liquidity
+    function _decreaseLiquidity(uint256 tokenId) private {
+        (, , , , , , , uint128 liquidity, , , , ) = _nonfungiblePositionManager
+            .positions(_positions[tokenId].uniswapTokenId);
+        INonfungiblePositionManager.DecreaseLiquidityParams
+            memory params = INonfungiblePositionManager
+                .DecreaseLiquidityParams({
+                    tokenId: _positions[tokenId].uniswapTokenId,
+                    liquidity: liquidity,
+                    amount0Min: 0,
+                    amount1Min: 0,
+                    deadline: block.timestamp
+                });
+
+        _nonfungiblePositionManager.decreaseLiquidity(params);
+    }
+
+    // Function that returns the nearest tick
+    // https://uniswapv3book.com/docs/milestone_4/tick-rounding/
+    function _nearestUsableTick(
+        int24 tick_,
+        int24 tickSpacing
+    ) private pure returns (int24 result) {
+        result =
+            int24(_divRound(int128(tick_), int128(tickSpacing))) *
+            tickSpacing;
+
+        if (result < TickMath.MIN_TICK) {
+            result += tickSpacing;
+        } else if (result > TickMath.MAX_TICK) {
+            result -= tickSpacing;
+        }
+    }
+
+    // div helper function
+    function _divRound(
+        int128 x,
+        int128 y
+    ) private pure returns (int128 result) {
+        int128 quot = ABDKMath64x64.div(x, y);
+        result = quot >> 64;
+
+        // Check if remainder is greater than 0.5
+        if (quot % 2 ** 64 >= 0x8000000000000000) {
+            result += 1;
         }
     }
 }
