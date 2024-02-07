@@ -21,6 +21,11 @@ contract PositionManager is
     Pausable,
     Ownable
 {
+    error PositionManager__InsufficientMaticBalance();
+    error PositionManager__StopPriceTooLow();
+    error PositionManager__StopPriceTooHigh();
+    error PositionManager__IncorrectClosure();
+
     INonfungiblePositionManager public immutable _nonfungiblePositionManager;
     IUniswapV3Factory public immutable _uniswapFactory;
     IWETH9 public immutable _WETH9;
