@@ -181,10 +181,9 @@ contract PositionManager is
         // keep address before burning the token
         address owner = ERC721.ownerOf(tokenId);
 
-        require(
-            msg.sender == owner || canClosePosition(tokenId),
-            "PositionManager: position can't be closed"
-        );
+        if (!(msg.sender == owner || canClosePosition(tokenId))) {
+            revert PositionManager__IncorrectClosure();
+        }
 
         _decreaseLiquidity(tokenId);
         collect(tokenId);
@@ -291,10 +290,9 @@ contract PositionManager is
 
     // Function that check native balance and wrap native if needed
     function _wrap(uint256 amount) private {
-        require(
-            msg.value >= amount,
-            "PositionManager: Insufficient balance of MATIC"
-        );
+        if (msg.value < amount) {
+            revert PositionManager__InsufficientMaticBalance();
+        }
         _WETH9.deposit{value: amount}();
     }
 
@@ -336,10 +334,10 @@ contract PositionManager is
         if (positionDirection == PositionDirection.BUY) {
             startTick -= tickSpacing;
 
-            require(
-                startTick > stopTick,
-                "PositionManager: Stop price must be lower than the current"
-            );
+            //startTick must be higher than the stopTick
+            if (startTick <= stopTick) {
+                revert PositionManager__StopPriceTooHigh();
+            }
 
             _addLiquidity(
                 positionDirection,
@@ -368,10 +366,10 @@ contract PositionManager is
         } else if (positionDirection == PositionDirection.SELL) {
             startTick += tickSpacing;
 
-            require(
-                startTick < stopTick,
-                "PositionManager: Stop price must be higher than the current"
-            );
+            //startTick must be lower than the stopTick
+            if (startTick >= stopTick) {
+                revert PositionManager__StopPriceTooLow();
+            }
 
             _addLiquidity(
                 positionDirection,
