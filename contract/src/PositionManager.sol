@@ -34,9 +34,9 @@ contract PositionManager is
 
     // Position structure (on-chain storage)
     struct Position {
-        PositionDirection positionDirection;
         uint256 amount;
         uint256 uniswapTokenId;
+        PositionDirection positionDirection;
         bool isNativeA;
         bool isNativeB;
     }
@@ -96,7 +96,7 @@ contract PositionManager is
     }
 
     // Function that sets pause state of the contract
-    function setPause(bool state) public onlyOwner {
+    function setPause(bool state) external onlyOwner {
         state ? _pause() : _unpause();
     }
 
@@ -108,7 +108,7 @@ contract PositionManager is
         uint160 stopSqrtPriceX96,
         uint256 amountB,
         uint256 amountBMin
-    ) public payable whenNotPaused {
+    ) external payable whenNotPaused {
         _openPosition(
             PositionDirection.BUY,
             tokenA,
@@ -130,7 +130,7 @@ contract PositionManager is
         uint160 stopSqrtPriceX96,
         uint256 amountA,
         uint256 amountAMin
-    ) public payable whenNotPaused {
+    ) external payable whenNotPaused {
         _openPosition(
             PositionDirection.SELL,
             tokenA,
@@ -146,40 +146,33 @@ contract PositionManager is
 
     // Function that checks if position can be closed
     function canClosePosition(uint256 tokenId) public view returns (bool) {
-        address token0;
-        address token1;
-        uint24 fee;
-        int24 tickLower;
-        int24 tickUpper;
+        Position memory _position = _positions[tokenId];
         (
             ,
             ,
-            token0,
-            token1,
-            fee,
-            tickLower,
-            tickUpper,
+            address token0,
+            address token1,
+            uint24 fee,
+            int24 tickLower,
+            int24 tickUpper,
             ,
             ,
             ,
             ,
 
-        ) = _nonfungiblePositionManager.positions(
-            _positions[tokenId].uniswapTokenId
-        );
+        ) = _nonfungiblePositionManager.positions(_position.uniswapTokenId);
         address pool = getPoolAddress(token0, token1, fee);
         int24 currentTick = getCurrentTick(pool);
-        PositionDirection dir = _positions[tokenId].positionDirection;
+        PositionDirection dir = _position.positionDirection;
 
         if (dir == PositionDirection.BUY) {
             return currentTick < tickLower;
-        } else {
-            return currentTick > tickUpper;
         }
+        return currentTick > tickUpper;
     }
 
     // Function that closes the position
-    function closePosition(uint256 tokenId) public {
+    function closePosition(uint256 tokenId) external {
         // keep address before burning the token
         address owner = ERC721.ownerOf(tokenId);
 
@@ -200,7 +193,7 @@ contract PositionManager is
         address tokenA,
         address tokenB,
         uint24 fee
-    ) public view returns (uint160 currentSqrtPriceX96) {
+    ) external view returns (uint160 currentSqrtPriceX96) {
         address pool = _uniswapFactory.getPool(tokenA, tokenB, fee);
         (currentSqrtPriceX96, , , , , , ) = IUniswapV3Pool(pool).slot0();
     }
@@ -227,9 +220,10 @@ contract PositionManager is
         PositionExtended[]
             memory positionExtendedArray = new PositionExtended[](count);
 
-        for (uint ix = 0; ix < ERC721.balanceOf(user); ix++) {
+        for (uint ix; ix < count; ) {
             uint256 tokenId = ERC721Enumerable.tokenOfOwnerByIndex(user, ix);
-            positionExtendedArray[ix].pos = _positions[tokenId];
+            Position memory _position = _positions[tokenId];
+            positionExtendedArray[ix].pos = _position;
             (
                 positionExtendedArray[ix].nonce,
                 positionExtendedArray[ix].operator,
@@ -243,9 +237,10 @@ contract PositionManager is
                 positionExtendedArray[ix].feeGrowthInside1LastX128,
                 positionExtendedArray[ix].tokensOwed0,
                 positionExtendedArray[ix].tokensOwed1
-            ) = _nonfungiblePositionManager.positions(
-                _positions[tokenId].uniswapTokenId
-            );
+            ) = _nonfungiblePositionManager.positions(_position.uniswapTokenId);
+            unchecked {
+                ++ix;
+            }
         }
 
         return positionExtendedArray;
@@ -257,15 +252,16 @@ contract PositionManager is
         address /*from*/,
         uint256 /*tokenId*/,
         bytes calldata /*data*/
-    ) public pure override returns (bytes4) {
+    ) external pure override returns (bytes4) {
         return this.onERC721Received.selector;
     }
 
     // Function that collects the position funds
     function collect(uint256 tokenId) public {
+        Position memory _position = _positions[tokenId];
         INonfungiblePositionManager.CollectParams memory params = INonfungiblePositionManager
             .CollectParams({
-                tokenId: _positions[tokenId].uniswapTokenId,
+                tokenId: _position.uniswapTokenId,
                 recipient: address(this), // send to contract
                 amount0Max: type(uint128).max,
                 amount1Max: type(uint128).max
@@ -275,12 +271,12 @@ contract PositionManager is
             .collect(params);
 
         _sendToOwner(
-            _positions[tokenId].uniswapTokenId,
+            _position.uniswapTokenId,
             ERC721.ownerOf(tokenId),
             amount0,
             amount1,
-            _positions[tokenId].isNativeA,
-            _positions[tokenId].isNativeB
+            _position.isNativeA,
+            _position.isNativeB
         );
     }
 
@@ -309,11 +305,6 @@ contract PositionManager is
         uint256 amountAMin,
         uint256 amountBMin
     ) private whenNotPaused {
-        address pool;
-        int24 currentTick;
-        int24 startTick;
-        int24 stopTick;
-        int24 tickSpacing;
         bool isNativeA;
         bool isNativeB;
 
@@ -327,12 +318,12 @@ contract PositionManager is
             isNativeB = true;
         }
 
-        pool = getPoolAddress(tokenA, tokenB, fee);
-        tickSpacing = IUniswapV3PoolImmutables(pool).tickSpacing();
-        (, currentTick, , , , , ) = IUniswapV3Pool(pool).slot0();
+        address pool = getPoolAddress(tokenA, tokenB, fee);
+        int24 tickSpacing = IUniswapV3PoolImmutables(pool).tickSpacing();
+        (, int24 currentTick, , , , , ) = IUniswapV3Pool(pool).slot0();
 
-        startTick = _nearestUsableTick(currentTick, tickSpacing);
-        stopTick = _nearestUsableTick(
+        int24 startTick = _nearestUsableTick(currentTick, tickSpacing);
+        int24 stopTick = _nearestUsableTick(
             TickMath.getTickAtSqrtRatio(stopSqrtPriceX96),
             tickSpacing
         );
@@ -552,8 +543,7 @@ contract PositionManager is
 
     // Function that decreases the liquidity
     function _decreaseLiquidity(uint256 tokenId) internal {
-        uint128 liquidity;
-        (, , , , , , , liquidity, , , , ) = _nonfungiblePositionManager
+        (, , , , , , , uint128 liquidity, , , , ) = _nonfungiblePositionManager
             .positions(_positions[tokenId].uniswapTokenId);
         INonfungiblePositionManager.DecreaseLiquidityParams
             memory params = INonfungiblePositionManager
