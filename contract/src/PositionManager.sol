@@ -2,16 +2,18 @@
 pragma solidity ^0.8.17;
 
 import "@uniswap-v3-periphery/contracts/interfaces/INonfungiblePositionManager.sol";
-import "@uniswap-v3-periphery/contracts/libraries/TransferHelper.sol";
-import "@uniswap-v3-core/contracts/libraries/TickMath.sol";
+import {TransferHelper} from "@uniswap-v3-periphery/contracts/libraries/TransferHelper.sol";
+import {TickMath} from "@uniswap-v3-core/contracts/libraries/TickMath.sol";
 import "@uniswap-v3-core/contracts/interfaces/IUniswapV3Pool.sol";
-import "@uniswap-v3-core/contracts/interfaces/IUniswapV3Factory.sol";
-import "@openzeppelin/contracts/security/Pausable.sol";
-import "@openzeppelin/contracts/access/Ownable.sol";
+import {IUniswapV3Factory} from "@uniswap-v3-core/contracts/interfaces/IUniswapV3Factory.sol";
+import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/token/ERC721/extensions/ERC721Enumerable.sol";
-import "@openzeppelin/contracts/token/ERC721/IERC721Receiver.sol";
-import "@abdk-libraries-solidity/ABDKMath64x64.sol";
-import "../interface/IWETH9.sol";
+import {IERC721Receiver} from "@openzeppelin/contracts/token/ERC721/IERC721Receiver.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {ABDKMath64x64} from "@abdk-libraries-solidity/ABDKMath64x64.sol";
+import {IWETH9} from "../interface/IWETH9.sol";
 
 import {console2} from "forge-std/Test.sol";
 
@@ -19,7 +21,8 @@ contract PositionManager is
     ERC721Enumerable,
     IERC721Receiver,
     Pausable,
-    Ownable
+    Ownable,
+    ReentrancyGuard
 {
     //Type declarations
     // Position structure (on-chain storage)
@@ -95,7 +98,10 @@ contract PositionManager is
         address uniswapFactory_,
         address WETH_,
         address ETH_
-    ) ERC721("Chain-owls PositionManager NFT", "CHAIN-OWLS-POS") {
+    )
+        Ownable(msg.sender)
+        ERC721("Chain-owls PositionManager NFT", "CHAIN-OWLS-POS")
+    {
         _nonfungiblePositionManager = INonfungiblePositionManager(
             nonfungiblePositionManager_
         );
@@ -155,7 +161,7 @@ contract PositionManager is
     }
 
     // Function that closes the position
-    function closePosition(uint256 tokenId) external {
+    function closePosition(uint256 tokenId) external nonReentrant {
         // keep address before burning the token
         address owner = ERC721.ownerOf(tokenId);
 
